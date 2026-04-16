@@ -1,0 +1,45 @@
+{
+  "name": "repo-shield",
+  "version": "1.0.0",
+  "private": true,
+  "description": "duplicate pr detector",
+  "author": "Chinmay <chinmaymhatre12@gmail.com>",
+  "license": "ISC",
+  "homepage": "https://github.com/chinmay/repo-shield-app",
+  "keywords": [
+    "probot",
+    "github",
+    "probot-app"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "probot run ./lib/index.js",
+    "test": "UPSTASH_VECTOR_REST_URL=http://dummy UPSTASH_VECTOR_REST_TOKEN=dummy vitest",
+    "sweep": "node ./lib/sweep.js"
+  },
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/node-fetch": "^2.6.13",
+    "@upstash/vector": "^1.2.3",
+    "dotenv": "^17.4.1",
+    "groq-sdk": "^1.1.2",
+    "node-fetch": "^2.7.0",
+    "probot": "^13.4.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "nock": "^14.0.5",
+    "smee-client": "^2.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3",
+    "vitest": "^2.0.0"
+  },
+  "overrides": {
+    "@types/pg": "8.15.1"
+  },
+  "engines": {
+    "node": ">= 18"
+  },
+  "type": "module"
+}

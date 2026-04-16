@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+/dist
+/build
+/lib
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+llm_context_audit*.log
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+coverage/
+
+# Local/Scratch files
+docs/
+scratch/
+test/
+audit_summary_*.md
+REPORTS/
+SENTINEL_REPORT.md
+
+# Certificates
+*.pem
+!mock-cert.pem
