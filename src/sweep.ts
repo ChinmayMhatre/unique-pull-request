@@ -80,6 +80,7 @@ async function main() {
 
     console.log(`✅ Collected ${prs.length} relevant PRs (Filtered out ${filteredOutCount} bots/drafts).`);
 
+    const namespace = `${owner}/${repo}`;
     const DEDUPE_THRESHOLD = 0.85; 
     const prCache: Record<number, { patch: string; embedding: number[]; title?: string; author?: string }> = {}; 
 
@@ -90,9 +91,21 @@ async function main() {
       console.log(`🧠 Phase 1: Ingesting PRs into Project Memory (Upstash)...`);
       for (let i = 0; i < prs.length; i++) {
         const pr = prs[i];
-        process.stdout.write(`\r[${i + 1}/${prs.length}] Ingesting: "${pr.title.substring(0, 30)}..."`);
         
         try {
+          // SHA Fingerprinting: Check if cache is fresh
+          const meta = await upstashService.getMetadataById(pr.number.toString(), namespace);
+          if (meta && meta.latest_sha === pr.head.sha) {
+            process.stdout.write(`\r[${i + 1}/${prs.length}] ✅ Fresh: #${pr.number} (SHA Match)`.padEnd(60));
+            continue;
+          }
+
+          if (meta) {
+             process.stdout.write(`\r[${i + 1}/${prs.length}] 🔄 Refreshing: #${pr.number} (Stale SHA)`.padEnd(60));
+          } else {
+             process.stdout.write(`\r[${i + 1}/${prs.length}] 📥 Ingesting: #${pr.number} (New)`.padEnd(60));
+          }
+          
           await new Promise(r => setTimeout(r, 1000)); 
           const filesRes = await octokit.pulls.listFiles({ owner, repo, pull_number: pr.number });
           
@@ -113,8 +126,10 @@ async function main() {
             pr_url: pr.html_url,
             author: pr.user?.login || "unknown",
             base_branch: pr.base.ref,
-            title: pr.title
-          });
+            title: pr.title,
+            repo_name: `${owner}/${repo}`,
+            latest_sha: pr.head.sha
+          }, namespace);
         } catch (err: any) {
           process.stdout.write(`\n   ⚠️  Skipped Ingestion #${pr.number}: ${err?.message || "Error"}\n`);
         }
@@ -135,7 +150,7 @@ async function main() {
         let embedding: number[] | undefined = prCache[pr.number]?.embedding;
         
         if (!embedding) {
-          const vectorRes = await upstashService.fetchVectorById(pr.number.toString());
+          const vectorRes = await upstashService.fetchVectorById(pr.number.toString(), namespace);
           if (vectorRes) {
             embedding = vectorRes;
           }
@@ -163,7 +178,7 @@ async function main() {
         if (!embedding) return;
 
         // Discovery Pool: Fetch 8 candidates to bypass noise, will be pruned in reasoning phase
-        const candidates = await upstashService.findSimilarPRs(embedding, 8);
+        const candidates = await upstashService.findSimilarPRs(embedding, namespace, 8);
         const validCandidates = candidates.filter(c => c.id !== pr.number.toString());
         
         const bestCandidate = validCandidates[0];

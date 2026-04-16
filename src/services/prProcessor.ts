@@ -179,13 +179,16 @@ export class PRProcessor {
       const embedding = await geminiService.generateEmbedding(patch);
       
       if (embedding.length) {
+        const namespace = `${owner}/${repo}`;
         await upstashService.upsertPREmbedding(pr.number.toString(), embedding, {
           pr_number: pr.number,
           pr_url: pr.html_url,
           author: author,
           base_branch: pr.base.ref,
-          title: pr.title
-        });
+          title: pr.title,
+          repo_name: `${owner}/${repo}`,
+          latest_sha: pr.head.sha
+        }, namespace);
       }
     } catch (e) {
       context.log.error(e as any, `Failed to sync memory for PR #${pr.number}`);

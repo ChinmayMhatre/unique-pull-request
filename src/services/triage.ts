@@ -46,9 +46,9 @@ export class TriageService {
       const embedding = await geminiService.generateEmbedding(combinedPatch);
       if (!embedding.length) return null;
 
-      // Constraint: Fetch exactly 3 candidates
+      const namespace = `${owner}/${repo}`;
       // Broaden the net: Fetch 8 candidates to bypass structural noise, but prune later
-      const similarPRs = await upstashService.findSimilarPRs(embedding, 8);
+      const similarPRs = await upstashService.findSimilarPRs(embedding, namespace, 8);
       const validCandidates = similarPRs.filter((m: any) => {
          const meta = m.metadata as unknown as PRMetadata;
          return meta.pr_number !== prNumber && (m.score || 0) > 0.85;
