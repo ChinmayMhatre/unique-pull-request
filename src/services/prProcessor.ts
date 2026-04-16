@@ -17,7 +17,7 @@ export class PRProcessor {
   /**
    * Main entry point for processing a Pull Request event.
    */
-  async processPR(context: Context<"pull_request.opened" | "pull_request.synchronize">): Promise<void> {
+  async processPR(context: Context<"pull_request.opened" | "pull_request.synchronize" | "pull_request.ready_for_review">): Promise<void> {
     const { octokit, payload, log } = context;
     const pr = payload.pull_request;
     const author = pr.user.login;
@@ -25,9 +25,9 @@ export class PRProcessor {
 
     log.info(`Processing PR #${pr.number} by ${author}`);
 
-    // 1. Policy check (Bypass)
-    if (this.shouldBypass(author)) {
-      log.info(`Bypassing PR from bot: ${author}`);
+    // 1. Policy check (Unified Bypass)
+    if (this.shouldBypass(pr)) {
+      log.info(`Bypassing PR #${pr.number}: Bot, Draft, or non-target branch.`);
       return;
     }
 
@@ -55,12 +55,14 @@ export class PRProcessor {
   }
 
   /**
-   * Logic to determine if a PR should be processed or bypassed.
+   * High-fidelity logic to skip undesirable PRs (Bots, Drafts, non-target branches).
    */
-  private shouldBypass(author: string): boolean {
-    return author.includes("[bot]") || 
-           author === "dependabot[bot]" || 
-           author === "renovate[bot]";
+  private shouldBypass(pr: any): boolean {
+    const isBot = pr.user?.type === 'Bot' || pr.user?.login.includes('[bot]');
+    const isDraft = pr.draft === true;
+    const isValidBranch = ['main', 'master', 'devel'].includes(pr.base.ref);
+
+    return isBot || isDraft || !isValidBranch;
   }
 
   /**
