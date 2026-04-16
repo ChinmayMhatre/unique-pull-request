@@ -193,14 +193,39 @@ async function main() {
     }
 
     console.log(`\n\n✅ Scan Complete. ${prs.length - reasoningQueue.length} PRs Fast-Tracked as UNIQUE.`);
-    console.log(`🧠 Phase 3: Unified Deep Reasoning (${reasoningQueue.length} PRs in queue)...`);
-    
+
+    // --- Option 1: Deduplicate symmetric pairs (A→B and B→A are the same pair) ---
+    const seenPairs = new Set<string>();
+    const dedupedQueue = reasoningQueue.filter(({ pr, validCandidates }) => {
+      const topCandidateId = validCandidates[0]?.id;
+      const pairKey = [pr.number.toString(), topCandidateId].sort().join("-");
+      if (seenPairs.has(pairKey)) return false;
+      seenPairs.add(pairKey);
+      return true;
+    });
+    console.log(`🔑 Pair Dedup: ${reasoningQueue.length} flagged → ${dedupedQueue.length} unique pairs.`);
+    console.log(`🧠 Phase 3: Unified Deep Reasoning (${dedupedQueue.length} PRs in queue)...`);
+
     const results = [];
-    for (let i = 0; i < reasoningQueue.length; i++) {
-       const { pr, validCandidates, incomingPatch: cachedPatch } = reasoningQueue[i];
+    for (let i = 0; i < dedupedQueue.length; i++) {
+       const { pr, validCandidates, incomingPatch: cachedPatch } = dedupedQueue[i];
        let incomingPatch = cachedPatch;
 
-       process.stdout.write(`\r[${i + 1}/${reasoningQueue.length}] Reasoning Judge: #${pr.number}...`);
+       process.stdout.write(`\r[${i + 1}/${dedupedQueue.length}] Reasoning Judge: #${pr.number}...`);
+
+       // --- Option 2: Trust the vector at ≥0.97 — skip LLM entirely ---
+       const topScore = validCandidates[0]?.score || 0;
+       if (topScore >= 0.97) {
+         results.push({
+           number: pr.number,
+           type: "shadow",
+           duplicateOf: `#${validCandidates[0].id}`,
+           reasoning: `Vector similarity ${topScore.toFixed(4)} — near-identical diff fingerprint. LLM skipped.`
+         });
+         process.stdout.write("\n");
+         console.log(`   ⚡ [PR #${pr.number}] AUTO-FLAGGED (Score: ${topScore.toFixed(4)} ≥ 0.97) — LLM skipped.`);
+         continue;
+       }
 
        try {
          await new Promise(r => setTimeout(r, 12000)); // Gemini Free Tier pacing
