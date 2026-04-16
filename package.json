@@ -15,7 +15,8 @@
     "build": "tsc",
     "start": "probot run ./lib/index.js",
     "test": "UPSTASH_VECTOR_REST_URL=http://dummy UPSTASH_VECTOR_REST_TOKEN=dummy vitest",
-    "sweep": "node ./lib/sweep.js"
+    "sweep": "node ./lib/sweep.js",
+    "probe": "tsc && node ./lib/probe-models.js"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

@@ -77,7 +77,7 @@ export class TriageService {
 
       // 4. Perform Unified Deep Analysis
       const analysis = await this.performDeepAnalysis(
-        combinedPatch,
+        rawPatch,
         { number: pr.number, title: pr.title, author: pr.user.login },
         activeCandidates,
         visionDoc
@@ -106,7 +106,7 @@ export class TriageService {
 
   /**
    * Shared reasoning engine for both Bot and Sweep flows.
-   * Logic: Gemini 2.0 -> Groq Fallback.
+   * Orchestrates automatic fallback across prioritized Gemini and Groq models.
    */
   async performDeepAnalysis(
     incomingDiff: string,
@@ -114,13 +114,41 @@ export class TriageService {
     candidates: any[],
     visionDoc: string | null = null
   ): Promise<AnalysisResult> {
-    try {
-      // Primary Pass: Gemini 2.0 (High Depth + Vision Support)
-      return await geminiService.analyzeRedundancy(incomingDiff, incomingMeta, candidates, visionDoc);
-    } catch (err) {
-      console.warn("🔄 Gemini failure. Falling back to Groq Layer...");
-      // Secondary Pass: Groq (Llama 3 70B)
-      return await groqService.analyzeRedundancy(incomingDiff, incomingMeta, candidates, visionDoc);
+    const { modelRouter } = await import("./modelRouter.js");
+
+    while (true) {
+      const model = modelRouter.getNextAvailableModel();
+      
+      if (!model) {
+        throw new Error("❌ ALL MODELS RATE-LIMITED. Cannot proceed with reasoning.");
+      }
+
+      try {
+        console.log(`\n   🧠 [PR #${incomingMeta.number}] Judging with ${model.id} (${model.provider.toUpperCase()})...`);
+        
+        const result = model.provider === 'gemini' 
+          ? await geminiService.analyzeRedundancy(incomingDiff, incomingMeta, candidates, visionDoc, model.id)
+          : await groqService.analyzeRedundancy(incomingDiff, incomingMeta, candidates, visionDoc, model.id);
+
+        modelRouter.recordUsage(model.id);
+        return { ...result, modelId: model.id };
+
+      } catch (err: any) {
+        // Detect Rate Limit (429) or Quota Exceeded
+        const isRateLimit = err?.message?.includes('429') || 
+                           err?.message?.includes('quota') || 
+                           err?.message?.includes('Rate limit');
+
+        if (isRateLimit) {
+          modelRouter.markRateLimited(model.id);
+          console.warn(`🔄 Falling back to next available model...`);
+          continue; // Try next model in loop
+        }
+
+        // For other errors, log and bubble up (don't blacklist the model for a 500 error)
+        console.error(`⚠️  Model ${model.id} failed with non-rate-limit error:`, err.message);
+        throw err;
+      }
     }
   }
 }

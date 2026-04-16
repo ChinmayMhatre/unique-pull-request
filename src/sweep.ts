@@ -52,7 +52,8 @@ interface LLMEntry {
   reasoning: string;
   qualityScore: number;
   autoFlagged: boolean;
-  llmProvider: 'gemini' | 'groq' | 'auto_vector';
+  llmProvider: string; // Dynamic provider/model name
+  modelUsed?: string;
 }
 
 // ─── SweepLogger ──────────────────────────────────────────────────────────────
@@ -116,7 +117,7 @@ async function main() {
 
   const DEDUPE_THRESHOLD = 0.85;
   const AUTO_FLAG_THRESHOLD = 0.97;
-  const namespace = `${owner}/${repo}`;
+  const namespace = `${owner}-${repo}`;
 
   // ─── Init Logger ────────────────────────────────────────────────────────────
   const logger = new SweepLogger(repoFullPath);
@@ -329,6 +330,7 @@ async function main() {
     const CONCURRENCY_LIMIT = 5;
 
     for (let i = 0; i < prs.length; i += CONCURRENCY_LIMIT) {
+      if (i > 0) await new Promise(r => setTimeout(r, 3000)); // Pacing between search bursts
       const chunk = prs.slice(i, i + CONCURRENCY_LIMIT);
 
       await Promise.all(chunk.map(async (pr: any, index: number) => {
@@ -464,7 +466,9 @@ async function main() {
       })),
     });
 
+    const { modelRouter } = await import("./services/modelRouter.js");
     const results: any[] = [];
+    let llmCallCount = 0;
 
     for (let i = 0; i < dedupedQueue.length; i++) {
       const { pr, validCandidates, incomingPatch: cachedPatch } = dedupedQueue[i];
@@ -501,7 +505,16 @@ async function main() {
       }
 
       try {
-        await new Promise(r => setTimeout(r, 12000)); // Free-tier pacing
+        // --- Smart Pacing ---
+        // 1. Skip delay for the first call
+        // 2. Dynamic delay based on current model RPM
+        if (llmCallCount > 0) {
+          const currentModel = modelRouter.getNextAvailableModel();
+          const rpm = currentModel?.rpm || 5;
+          const delayMs = Math.max(1000, Math.floor(60000 / rpm) + 500);
+          await new Promise(r => setTimeout(r, delayMs));
+        }
+        llmCallCount++;
 
         if (!incomingPatch) {
           const filesRes = await octokit.pulls.listFiles({ owner, repo, pull_number: pr.number });
@@ -548,7 +561,8 @@ async function main() {
           reasoning: analysis.reasoning,
           qualityScore: analysis.qualityScore,
           autoFlagged: false,
-          llmProvider: 'gemini',
+          llmProvider: analysis.modelId || 'unknown',
+          modelUsed: analysis.modelId,
         };
         llmLog.push(llmEntry);
 
@@ -558,9 +572,10 @@ async function main() {
             type: analysis.type,
             duplicateOf: analysis.primaryMatchPr ? `#${analysis.primaryMatchPr}` : "-",
             reasoning: analysis.reasoning,
+            model: analysis.modelId,
           });
           process.stdout.write("\n");
-          console.log(`   🔸 [PR #${pr.number}] ${analysis.type.toUpperCase()} → #${analysis.primaryMatchPr}`);
+          console.log(`   🔸 [PR #${pr.number}] ${analysis.type.toUpperCase()} (via ${analysis.modelId}) → #${analysis.primaryMatchPr}`);
           console.log(`      ${analysis.reasoning.substring(0, 120)}...`);
         }
 
@@ -570,6 +585,7 @@ async function main() {
       }
     }
 
+
     // Write Phase 3 LLM results
     await logger.write('05_llm_results.json', {
       summary: {
@@ -578,6 +594,7 @@ async function main() {
         unique: llmLog.filter(e => !e.isDuplicate).length,
         auto_flagged_by_vector: llmLog.filter(e => e.autoFlagged).length,
         llm_calls_made: llmLog.filter(e => !e.autoFlagged).length,
+        model_usage: modelRouter.getUsageSummary(),
         type_breakdown: llmLog
           .filter(e => e.isDuplicate)
           .reduce((acc, e) => { acc[e.type] = (acc[e.type] || 0) + 1; return acc; }, {} as Record<string, number>),

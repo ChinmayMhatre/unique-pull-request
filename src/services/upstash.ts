@@ -26,32 +26,32 @@ export class UpstashService {
   }
 
   async upsertPREmbedding(id: string, vector: number[], metadata: PRMetadata, namespace: string) {
-    await this.index.upsert({
+    await this.index.namespace(namespace).upsert({
       id,
       vector,
       metadata: metadata as unknown as Record<string, unknown>,
-    }, { namespace });
+    });
   }
 
   async findSimilarPRs(vector: number[], namespace: string, topK: number = 3): Promise<any[]> {
-    const results = await this.index.query({
+    const results = await this.index.namespace(namespace).query({
       vector,
       topK,
       includeMetadata: true,
       includeVectors: false,
-    }, { namespace });
+    });
     return results;
   }
 
   async getMetadataById(id: string, namespace: string): Promise<PRMetadata | null> {
-    const res = await this.index.fetch([id], { includeMetadata: true, namespace });
+    const res = await this.index.namespace(namespace).fetch([id], { includeMetadata: true });
     const first = res?.[0];
     if (!first || !first.metadata) return null;
     return first.metadata as unknown as PRMetadata;
   }
 
   async fetchVectorById(id: string, namespace: string): Promise<number[] | null> {
-    const res = await this.index.fetch([id], { includeVectors: true, namespace });
+    const res = await this.index.namespace(namespace).fetch([id], { includeVectors: true });
     return res?.[0]?.vector || null;
   }
 }
