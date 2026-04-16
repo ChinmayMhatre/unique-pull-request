@@ -45,16 +45,26 @@ export class ContextOptimizer {
 
       if (currentFileIsNoise) continue;
 
-      // Strip unchanged imports and comments
-      const isImport = /^\s*import\s+/.test(line) || /^\s*from\s+['"]/.test(line);
-      const isComment = /^\s*\/\//.test(line) || /^\s*\/\*/.test(line) || /^\s*\*/.test(line);
+      // Identification Patterns
+      const isImport = /^[\+\- ]*import\s+/.test(line) || /^[\+\- ]*from\s+['"]/.test(line);
+      const isComment = /^[\+\- ]*(\/\/|\/\*|\*)/.test(line);
       const isChange = line.startsWith('+') || line.startsWith('-');
 
-      if ((isImport || isComment) && !isChange) {
-        continue;
-      }
+      // 1. Comment Sieve: Strip ALL comments
+      if (isComment) continue;
 
-      cleanedLines.push(line);
+      // 2. Import Sieve: Strip only if unchanged context
+      if (isImport && !isChange) continue;
+
+      // 3. Whitespace Compression
+      const prefix = line.match(/^[\+\- ]/) ? line[0] : '';
+      const mainContent = line.match(/^[\+\- ]/) ? line.slice(1) : line;
+      const compressed = mainContent.trim().replace(/\s+/g, ' ');
+      
+      // Skip lines that are now empty (unless they were added/removed)
+      if (!compressed && !isChange) continue;
+
+      cleanedLines.push(`${prefix}${compressed}`);
     }
 
     let result = cleanedLines.join('\n');
