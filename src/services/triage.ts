@@ -1,4 +1,5 @@
-import { geminiService } from "./gemini.js";
+import { geminiService, AnalysisResult } from "./gemini.js";
+import { groqService } from "./groq.js";
 import { upstashService, PRMetadata } from "./upstash.js";
 import { ProbotOctokit } from "probot";
 
@@ -8,9 +9,13 @@ export interface TriageResult {
   reasoning: string;
   qualityScore: number;
   duplicateOfUrl?: string;
+  type?: string;
 }
 
 export class TriageService {
+  /**
+   * High-level entry point for real-time PR triage (Main Bot Flow).
+   */
   async triagePR(
     octokit: InstanceType<typeof ProbotOctokit>,
     owner: string,
@@ -19,91 +24,102 @@ export class TriageService {
     visionDoc: string | null
   ): Promise<TriageResult | null> {
     try {
-      // 1. Fetch and clean PR files
+      // 1. Fetch Incoming PR
       const prRes = await octokit.pulls.get({ owner, repo, pull_number: prNumber });
       const pr = prRes.data;
       
-      const filesRes = await octokit.pulls.listFiles({
-        owner,
-        repo,
-        pull_number: prNumber,
-        per_page: 100
-      });
+      const filesRes = await octokit.pulls.listFiles({ owner, repo, pull_number: prNumber, per_page: 100 });
       
-      const relevantFiles = filesRes.data.filter((f: any) => {
-        const name = f.filename.toLowerCase();
-        return !name.endsWith("package-lock.json") && 
-               !name.endsWith("yarn.lock") && 
-               !name.endsWith(".svg") &&
-               !name.endsWith("pnpm-lock.yaml");
-      });
-
-      // Token Safety: Skip massive PRs and truncate diffs strictly
-      if (relevantFiles.length > 15) {
-        console.warn(`PR #${prNumber} too large (${relevantFiles.length} files). Skipping to protect tokens.`);
+      // Constraint: Skip PRs with > 15 files
+      if (filesRes.data.length > 15) {
+        console.warn(`PR #${prNumber} too large (${filesRes.data.length} files). Skipping.`);
         return null;
       }
       
-      const combinedPatch = relevantFiles.map((f: any) => f.patch || "").join("\n").substring(0, 3500);
-      
+      const { ContextOptimizer } = await import("./optimizer.js");
+      const rawPatch = filesRes.data.map((f: any) => f.patch || "").join("\n");
+      const combinedPatch = ContextOptimizer.cleanDiff(rawPatch, 1500);
+
       if (!combinedPatch.trim()) return null;
 
-      // 2. Generate Embedding
+      // 2. Generate Embedding & Search
       const embedding = await geminiService.generateEmbedding(combinedPatch);
       if (!embedding.length) return null;
 
-      // 3. Vector Search
+      // Constraint: Fetch exactly 3 candidates
       const similarPRs = await upstashService.findSimilarPRs(embedding, 3);
-      const topMatch = similarPRs.find((m: any) => {
+      const validCandidates = similarPRs.filter((m: any) => {
          const meta = m.metadata as unknown as PRMetadata;
          return meta.pr_number !== prNumber && (m.score || 0) > 0.85;
       });
 
-      let historicalPatch = null;
-      let historicalMeta = null;
+      // 3. Fetch Candidate Details
+      const candidates = await Promise.all(validCandidates.map(async (m: any) => {
+        const meta = m.metadata as unknown as PRMetadata;
+        try {
+          const histFiles = await octokit.pulls.listFiles({ owner, repo, pull_number: meta.pr_number, per_page: 100 });
+          const histPatch = histFiles.data.map((f: any) => f.patch || "").join("\n");
+          return {
+            number: meta.pr_number,
+            title: meta.title,
+            author: meta.author,
+            diff: histPatch,
+            score: m.score,
+            url: meta.pr_url
+          };
+        } catch {
+          return null;
+        }
+      }));
 
-      if (topMatch) {
-        historicalMeta = topMatch.metadata as unknown as PRMetadata;
-        const histFiles = await octokit.pulls.listFiles({
-          owner,
-          repo,
-          pull_number: historicalMeta.pr_number,
-          per_page: 100
-        });
-        historicalPatch = histFiles.data.filter((f: any) => {
-           const n = f.filename.toLowerCase();
-           return !n.endsWith("lock.json") && !n.endsWith(".svg");
-        }).map((f: any) => f.patch || "").join("\n").substring(0, 3500);
+      const activeCandidates = candidates.filter(c => c !== null) as any[];
+
+      // 4. Perform Unified Deep Analysis
+      const analysis = await this.performDeepAnalysis(
+        combinedPatch,
+        { number: pr.number, title: pr.title, author: pr.user.login },
+        activeCandidates,
+        visionDoc
+      );
+
+      // Map primary match URL for reporting
+      let duplicateOfUrl = undefined;
+      if (analysis.isDuplicate && analysis.primaryMatchPr) {
+        const match = activeCandidates.find(c => c.number === analysis.primaryMatchPr);
+        duplicateOfUrl = match?.url;
       }
 
-      // 4. Gemini Review
-      const review = await geminiService.performReview(combinedPatch, historicalPatch, {
-        incomingBase: pr.base.ref,
-        historicalBase: historicalMeta?.base_branch || null,
-        incomingAuthor: pr.user.login,
-        historicalAuthor: historicalMeta?.author || null,
-        visionDoc: visionDoc
-      });
-
-      // 5. Sync Vector DB (Enabled for demo learning)
-      await upstashService.upsertPREmbedding(prNumber.toString(), embedding, {
-        pr_number: prNumber,
-        pr_url: pr.html_url,
-        author: pr.user.login,
-        base_branch: pr.base.ref,
-        title: pr.title
-      });
-
       return {
-        isDuplicate: review.is_duplicate,
-        alignsWithVision: review.aligns_with_vision,
-        reasoning: review.reasoning,
-        qualityScore: review.quality_score,
-        duplicateOfUrl: historicalMeta?.pr_url
+        isDuplicate: analysis.isDuplicate,
+        alignsWithVision: analysis.alignsWithVision,
+        reasoning: analysis.reasoning,
+        qualityScore: analysis.qualityScore,
+        duplicateOfUrl,
+        type: analysis.type
       };
     } catch (e) {
       console.error(`Error triaging PR #${prNumber}:`, e);
       return null;
+    }
+  }
+
+  /**
+   * Shared reasoning engine for both Bot and Sweep flows.
+   * Logic: Gemini 2.0 -> Groq Fallback.
+   */
+  async performDeepAnalysis(
+    incomingDiff: string,
+    incomingMeta: { number: number, title: string, author: string },
+    candidates: any[],
+    visionDoc: string | null = null
+  ): Promise<AnalysisResult> {
+    try {
+      // Primary Pass: Gemini 2.0 (High Depth + Vision Support)
+      return await geminiService.analyzeRedundancy(incomingDiff, incomingMeta, candidates, visionDoc);
+    } catch (err) {
+      console.warn("🔄 Gemini failure. Falling back to Groq Layer...");
+      // Secondary Pass: Groq (Llama 3 70B)
+      return await groqService.analyzeRedundancy(incomingDiff, incomingMeta, candidates, visionDoc);
     }
   }
 }

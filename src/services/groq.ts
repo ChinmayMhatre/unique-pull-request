@@ -1,33 +1,29 @@
 import 'dotenv/config';
 import Groq from "groq-sdk";
+import { AnalysisResult } from "./gemini.js";
 
 export class GroqService {
   private groq: Groq;
 
   constructor() {
     const apiKey = process.env.GROQ_API_KEY;
-    if (!apiKey) {
-      console.warn("⚠️ GROQ_API_KEY missing. Fallback reasoning disabled.");
-    }
     this.groq = new Groq({ apiKey: apiKey || 'dummy' });
   }
 
   /**
-   * High-speed redundancy analysis using Llama 3 70B on Groq.
+   * High-speed redundancy analysis using Llama 3 on Groq.
+   * Matches signature and capabilities of GeminiService.
    */
   async analyzeRedundancy(
     rawIncomingDiff: string,
     incomingMetadata: { number: number; title: string; author: string },
-    rawCandidates: Array<{ number: number; title: string; author: string; diff: string; score?: number }>
-  ): Promise<{
-    isDuplicate: boolean;
-    type: 'unique' | 'shadow' | 'superset' | 'competing';
-    confidence: number;
-    primaryMatchPr?: number;
-    reasoning: string;
-  }> {
+    rawCandidates: Array<{ number: number; title: string; author: string; diff: string; score?: number }>,
+    visionDoc: string | null = null
+  ): Promise<AnalysisResult> {
     const { ContextOptimizer } = await import("./optimizer.js");
-    const incomingDiff = ContextOptimizer.cleanDiff(rawIncomingDiff, 3000);
+    
+    // Constraint: 1,500 characters per diff for maximum efficiency
+    const incomingDiff = ContextOptimizer.cleanDiff(rawIncomingDiff, 1500);
     const activeCandidates = ContextOptimizer.pruneCandidates(rawCandidates, 3);
 
     const candidatesText = (activeCandidates && activeCandidates.length > 0)
@@ -36,10 +32,18 @@ Candidate #${c.number}
 Title: ${c.title}
 Author: ${c.author}
 Similarity Score: ${(c.score || 0).toFixed(4)}
-Diff Snippet (Optimized):
-${ContextOptimizer.cleanDiff(c.diff, 2000)}
+Diff Snippet:
+${ContextOptimizer.cleanDiff(c.diff, 1500)}
 `).join('\n---\n')
       : "[NO CANDIDATES]";
+
+    const visionSection = visionDoc ? `
+[PROJECT VISION]
+${visionDoc}
+
+[Vision Evaluation Rule]
+Evaluate if the CURRENT PR aligns with the rules above. Set "alignsWithVision" to false if it violates architectural constraints.
+` : "";
 
     const prompt = `Assess the relationship between these Pull Requests with the precision of a Lead Software Architect.
 
@@ -50,12 +54,13 @@ ${incomingDiff}
 
 [CANDIDATES]
 ${candidatesText}
+${visionSection}
 
-[Evaluation Rules]
+[Redundancy Evaluation Rules]
 1. "unique": No significant logic overlap.
-2. "shadow": The PRs solve the EXACT same problem with different implementation details (e.g. different variable names but same logic flow).
-3. "superset": This PR (or a candidate) is a small fix already covered by a larger, more comprehensive refactor in another. 
-4. "competing": Both PRs solve the same bug/feature but with different, often conflicting, architectural approaches.
+2. "shadow": Solve the EXACT same problem with different implementation details.
+3. "superset": This PR (or a candidate) is a small fix covered by a larger refactor in another. 
+4. "competing": Both solve the same bug/feature but with conflicting architectural approaches.
 
 [Output Format]
 Return ONLY a JSON object with:
@@ -63,15 +68,17 @@ Return ONLY a JSON object with:
   "isDuplicate": boolean,
   "type": "unique" | "shadow" | "superset" | "competing",
   "confidence": number (0-1),
-  "primaryMatchPr": number (the PR number it matches),
-  "reasoning": "A concise explanation of the architectural overlap."
+  "primaryMatchPr": number | null,
+  "reasoning": "Concise architectural explanation.",
+  "alignsWithVision": boolean,
+  "qualityScore": number
 }
 `;
 
     try {
       const response = await this.groq.chat.completions.create({
         messages: [{ role: "user", content: prompt }],
-        model: "llama-3.1-70b-versatile",
+        model: "llama-3.3-70b-specdec", // Optimal for JSON reasoning
         response_format: { type: "json_object" }
       });
 
@@ -82,12 +89,21 @@ Return ONLY a JSON object with:
         isDuplicate: result.isDuplicate || false,
         type: result.type || 'unique',
         confidence: result.confidence || 0,
-        primaryMatchPr: result.primaryMatchPr,
-        reasoning: result.reasoning || "No reasoning provided."
+        primaryMatchPr: result.primaryMatchPr || undefined,
+        reasoning: result.reasoning || "No reasoning provided.",
+        alignsWithVision: result.alignsWithVision ?? true,
+        qualityScore: result.qualityScore || 5
       };
     } catch (error) {
       console.error("❌ Groq reasoning pass failed:", error);
-      return { isDuplicate: false, type: "unique", confidence: 0, reasoning: "Groq Error" };
+      return { 
+        isDuplicate: false, 
+        type: "unique", 
+        confidence: 0, 
+        reasoning: "Groq Error",
+        alignsWithVision: true,
+        qualityScore: 5
+      };
     }
   }
 }

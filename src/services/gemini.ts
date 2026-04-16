@@ -7,6 +7,16 @@ dotenv.config();
 const apiKey = process.env.GEMINI_API_KEY || '';
 const genAI = new GoogleGenerativeAI(apiKey);
 
+export interface AnalysisResult {
+  isDuplicate: boolean;
+  type: 'unique' | 'shadow' | 'superset' | 'competing';
+  confidence: number;
+  primaryMatchPr?: number;
+  reasoning: string;
+  alignsWithVision: boolean;
+  qualityScore: number;
+}
+
 export class GeminiService {
   /**
    * Generates embeddings using direct fetch call to the stable v1 endpoint.
@@ -28,7 +38,6 @@ export class GeminiService {
       return data.embedding.values;
     } catch (error) {
       console.error("Gemini Embedding Error:", error);
-      // Fallback to legacy model via SDK
       const model = genAI.getGenerativeModel({ model: "embedding-001" });
       const result = await model.embedContent(text);
       return result.embedding.values;
@@ -36,31 +45,18 @@ export class GeminiService {
   }
 
   /**
-   * Direct prompt for PR review (Standard Triage)
-   */
-  async performReview(incoming: string, historical: string | null, metadata: any): Promise<any> {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-    const prompt = `Review this PR... [TRUNCATED FOR BREVITY]`; 
-    // Note: In production we use the full schema-driven prompt
-    return { is_duplicate: false, aligns_with_vision: true, reasoning: "Live Reasoning Enabled", quality_score: 5 };
-  }
-
-  /**
-   * Analyzes a PR against multiple historical candidates using Gemini 2.0.
+   * Primary deep reasoning engine for both Bot and Sweep flows.
    */
   async analyzeRedundancy(
     rawIncomingDiff: string,
     incomingMetadata: { number: number; title: string; author: string },
-    rawCandidates: Array<{ number: number; title: string; author: string; diff: string; score?: number }>
-  ): Promise<{
-    isDuplicate: boolean;
-    type: 'unique' | 'shadow' | 'superset' | 'competing';
-    confidence: number;
-    primaryMatchPr?: number;
-    reasoning: string;
-  }> {
+    rawCandidates: Array<{ number: number; title: string; author: string; diff: string; score?: number }>,
+    visionDoc: string | null = null
+  ): Promise<AnalysisResult> {
     const { ContextOptimizer } = await import("./optimizer.js");
-    const incomingDiff = ContextOptimizer.cleanDiff(rawIncomingDiff, 3000);
+    
+    // Constraint: 1,500 characters per diff for maximum efficiency
+    const incomingDiff = ContextOptimizer.cleanDiff(rawIncomingDiff, 1500);
     const activeCandidates = ContextOptimizer.pruneCandidates(rawCandidates, 3);
 
     const candidatesText = activeCandidates.map(c => `
@@ -68,13 +64,22 @@ Candidate #${c.number}
 Title: ${c.title}
 Author: ${c.author}
 Score: ${(c.score || 0).toFixed(4)}
-Diff: ${ContextOptimizer.cleanDiff(c.diff, 2000)}
+Diff: ${ContextOptimizer.cleanDiff(c.diff, 1500)}
 `).join('\n---\n');
 
     const model = genAI.getGenerativeModel({ 
       model: "gemini-2.0-flash",
       generationConfig: { responseMimeType: "application/json" }
     });
+
+    const visionSection = visionDoc ? `
+[PROJECT VISION]
+The following document describes the mandatory architectural goals and constraints of this project.
+${visionDoc}
+
+[Vision Evaluation Rule]
+Evaluate if the CURRENT PR aligns with the rules above. Set "alignsWithVision" to false if it violates architectural constraints.
+` : "";
 
     const prompt = `Assess the relationship between these Pull Requests with the precision of a Lead Software Architect.
 
@@ -85,12 +90,13 @@ ${incomingDiff}
 
 [CANDIDATES]
 ${candidatesText}
+${visionSection}
 
-[Evaluation Rules]
+[Redundancy Evaluation Rules]
 1. "unique": No significant logic overlap.
-2. "shadow": The PRs solve the EXACT same problem with different implementation details (e.g. different variable names but same logic flow).
-3. "superset": This PR (or a candidate) is a small fix already covered by a larger, more comprehensive refactor in another. 
-4. "competing": Both PRs solve the same bug/feature but with different, often conflicting, architectural approaches.
+2. "shadow": Solve the EXACT same problem with different implementation details.
+3. "superset": This PR (or a candidate) is a small fix covered by a larger refactor in another. 
+4. "competing": Both solve the same bug/feature but with conflicting architectural approaches.
 
 [Output Format]
 Return ONLY a JSON object with:
@@ -98,8 +104,10 @@ Return ONLY a JSON object with:
   "isDuplicate": boolean,
   "type": "unique" | "shadow" | "superset" | "competing",
   "confidence": number (0-1),
-  "primaryMatchPr": number (the PR number it matches),
-  "reasoning": "A concise explanation of the architectural overlap."
+  "primaryMatchPr": number | null,
+  "reasoning": "Concise architectural explanation.",
+  "alignsWithVision": boolean (default true if no vision doc provided),
+  "qualityScore": number (1-10, assess code structure and clarity)
 }
 `;
 
@@ -110,13 +118,38 @@ Return ONLY a JSON object with:
         isDuplicate: response.isDuplicate || false,
         type: response.type || 'unique',
         confidence: response.confidence || 0,
-        primaryMatchPr: response.primaryMatchPr,
-        reasoning: response.reasoning || "No reasoning provided."
+        primaryMatchPr: response.primaryMatchPr || undefined,
+        reasoning: response.reasoning || "No reasoning provided.",
+        alignsWithVision: response.alignsWithVision ?? true,
+        qualityScore: response.qualityScore || 5
       };
     } catch (error) {
       console.error("Gemini Reasoning Error:", error);
-      return { isDuplicate: false, type: 'unique', confidence: 0, reasoning: "Error in live reasoning." };
+      throw error; // Rethrow for TriageService to handle fallback
     }
+  }
+
+  /**
+   * Legacy method - deprecated in favor of analyzeRedundancy
+   */
+  async performReview(incoming: string, historical: string | null, metadata: any): Promise<any> {
+    const res = await this.analyzeRedundancy(incoming, {
+      number: 0,
+      title: "Unknown",
+      author: metadata.incomingAuthor
+    }, historical ? [{
+      number: 0,
+      title: "Historical",
+      author: metadata.historicalAuthor || "Unknown",
+      diff: historical
+    }] : [], metadata.visionDoc);
+    
+    return {
+      is_duplicate: res.isDuplicate,
+      aligns_with_vision: res.alignsWithVision,
+      reasoning: res.reasoning,
+      quality_score: res.qualityScore
+    };
   }
 }
 
