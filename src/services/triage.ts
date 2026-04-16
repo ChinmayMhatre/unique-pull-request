@@ -126,27 +126,58 @@ export class TriageService {
       try {
         console.log(`\n   🧠 [PR #${incomingMeta.number}] Judging with ${model.id} (${model.provider.toUpperCase()})...`);
         
-        const result = model.provider === 'gemini' 
-          ? await geminiService.analyzeRedundancy(incomingDiff, incomingMeta, candidates, visionDoc, model.id)
-          : await groqService.analyzeRedundancy(incomingDiff, incomingMeta, candidates, visionDoc, model.id);
+        // Resilience Wrapper: Handle 503 with retries before falling back
+        const executeWithRetry = async (retries = 3, backoff = 2000) => {
+          for (let attempt = 0; attempt < retries; attempt++) {
+            try {
+              return model.provider === 'gemini' 
+                ? await geminiService.analyzeRedundancy(incomingDiff, incomingMeta, candidates, visionDoc, model.id)
+                : await groqService.analyzeRedundancy(incomingDiff, incomingMeta, candidates, visionDoc, model.id);
+            } catch (err: any) {
+              const isServiceErr = err?.message?.includes('503') || err?.message?.includes('504') || err?.message?.includes('Service Unavailable');
+              if (isServiceErr && attempt < retries - 1) {
+                const wait = backoff * Math.pow(2, attempt) + (Math.random() * 1000);
+                console.warn(`      ⚠️  Model ${model.id} busy (503). Retrying in ${Math.round(wait)}ms... (Attempt ${attempt + 1}/${retries})`);
+                await new Promise(r => setTimeout(r, wait));
+                continue;
+              }
+              throw err; // Out of retries or different error
+            }
+          }
+          throw new Error(`Max retries reached for model ${model.id}`);
+        };
+
+        const result = await executeWithRetry();
+        if (!result) throw new Error("LLM returned empty result after retries");
+
+        // --- SANITY CHECK: Ensure type 'unique' never has isDuplicate = true ---
+        if (result.type === 'unique') {
+          result.isDuplicate = false;
+        } else if (!result.isDuplicate) {
+          // If already flagged as false, ensure type is recorded as unique
+          result.type = 'unique';
+        }
 
         modelRouter.recordUsage(model.id);
         return { ...result, modelId: model.id };
 
       } catch (err: any) {
-        // Detect Rate Limit (429) or Quota Exceeded
+        // Detect Rate Limit (429) or persistent Service Error (503 after retries)
         const isRateLimit = err?.message?.includes('429') || 
                            err?.message?.includes('quota') || 
                            err?.message?.includes('Rate limit');
+        
+        const isPersistentServiceErr = err?.message?.includes('503') || err?.message?.includes('504');
 
-        if (isRateLimit) {
+        if (isRateLimit || isPersistentServiceErr) {
+          // If it's a persistent 503, cooler down for this session
           modelRouter.markRateLimited(model.id);
-          console.warn(`🔄 Falling back to next available model...`);
+          console.warn(`🔄 ${isRateLimit ? "Rate limit" : "Persistent 503"} hit. Falling back to next available model...`);
           continue; // Try next model in loop
         }
 
-        // For other errors, log and bubble up (don't blacklist the model for a 500 error)
-        console.error(`⚠️  Model ${model.id} failed with non-rate-limit error:`, err.message);
+        // For other errors, log and bubble up
+        console.error(`⚠️  Model ${model.id} failed with non-recoverable error:`, err.message);
         throw err;
       }
     }

@@ -105,7 +105,7 @@ export class ContextOptimizer {
     const files = new Set<string>();
 
     for (const line of lines) {
-      const fileMatch = line.match(/^(?:diff --git [ab]\/|--- [ab]\/|\+\+\+ [ab]\/)(.+)$/);
+      const fileMatch = line.match(/^(?:diff --git [ab]\/|--- [ab]\/|\+\+\+ [ab]\/|Index: |filename: |\[FILE: )(.+?)(\]|)$/);
       if (fileMatch) {
         const filePath = fileMatch[1].trim().split(' ')[0];
         files.add(filePath);

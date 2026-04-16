@@ -24,11 +24,12 @@ export class GeminiService {
    */
   async generateEmbedding(text: string): Promise<number[]> {
     try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`;
+      // Use the stable v1 endpoint for the modern embedding model
+      const url = `https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent?key=${apiKey}`;
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           content: { parts: [{ text }] },
           outputDimensionality: 1536
         })
@@ -39,13 +40,25 @@ export class GeminiService {
       }
 
       const data = await response.json() as any;
-      return data.embedding.values;
+      let values = data.embedding.values;
+
+      // Explicitly truncate/pad if necessary to match the 1536 expected by Upstash
+      if (values.length > 1536) {
+        values = values.slice(0, 1536);
+      }
+
+      return values;
     } catch (error) {
       console.error("Gemini Embedding Error:", error);
-      // Fallback to SDK method using the modern model name
-      const model = genAI.getGenerativeModel({ model: "gemini-embedding-001" });
+      // Fallback with modern model
+      const model = genAI.getGenerativeModel({ model: "text-embedding-004" });
       const result = await model.embedContent(text);
-      return result.embedding.values;
+      let values = result.embedding.values;
+
+      if (values.length > 1536) {
+        values = values.slice(0, 1536);
+      }
+      return values;
     }
   }
 
@@ -60,11 +73,11 @@ export class GeminiService {
     overrideModelId?: string
   ): Promise<AnalysisResult> {
     const { ContextOptimizer } = await import("./optimizer.js");
-    
+
     // 1. Structural Analysis
     const incomingFiles = ContextOptimizer.getModifiedFiles(rawIncomingDiff);
     const incomingScopes = ContextOptimizer.extractScopes(incomingFiles);
-    
+
     // Constraint: 1,500 characters per diff for maximum efficiency
     const incomingDiff = ContextOptimizer.cleanDiff(rawIncomingDiff, 1500);
     const activeCandidates = ContextOptimizer.pruneCandidates(rawCandidates, 3);
@@ -73,7 +86,7 @@ export class GeminiService {
       const cFiles = ContextOptimizer.getModifiedFiles(c.diff);
       const cScopes = ContextOptimizer.extractScopes(cFiles);
       const intersection = ContextOptimizer.calculatePathIntersection(incomingFiles, cFiles);
-      
+
       return `
 Candidate #${c.number}
 Title: ${c.title}
@@ -89,7 +102,7 @@ ${ContextOptimizer.cleanDiff(c.diff, 1500)}
     }).join('\n---\n');
 
     const modelId = overrideModelId || "gemini-2.0-flash";
-    const model = genAI.getGenerativeModel({ 
+    const model = genAI.getGenerativeModel({
       model: modelId,
       generationConfig: { responseMimeType: "application/json" }
     });
@@ -179,7 +192,7 @@ Return ONLY a JSON object with:
       author: metadata.historicalAuthor || "Unknown",
       diff: historical
     }] : [], metadata.visionDoc);
-    
+
     return {
       is_duplicate: res.isDuplicate,
       aligns_with_vision: res.alignsWithVision,

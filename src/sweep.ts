@@ -257,7 +257,7 @@ async function main() {
           }
 
           const { ContextOptimizer } = await import("./services/optimizer.js");
-          const rawPatch = filesRes.data.map((f: any) => f.patch || "").join("\n");
+          const rawPatch = filesRes.data.map((f: any) => `--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch || ""}`).join("\n");
           const patch = ContextOptimizer.cleanDiff(rawPatch, 1500);
 
           if (!patch.trim()) {
@@ -518,7 +518,7 @@ async function main() {
 
         if (!incomingPatch) {
           const filesRes = await octokit.pulls.listFiles({ owner, repo, pull_number: pr.number });
-          incomingPatch = filesRes.data.map((f: any) => f.patch || "").join("\n");
+          incomingPatch = filesRes.data.map((f: any) => `--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch || ""}`).join("\n");
         }
 
         const candidateDetails = (await Promise.all(
@@ -529,7 +529,7 @@ async function main() {
                 number: parseInt(c.id),
                 title: c.metadata.title,
                 author: c.metadata.author,
-                diff: cFiles.data.map((f: any) => f.patch || "").join("\n"),
+                diff: cFiles.data.map((f: any) => `--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch || ""}`).join("\n"),
                 score: c.score,
                 url: c.metadata.pr_url,
               };
