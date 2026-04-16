@@ -162,8 +162,8 @@ async function main() {
 
         if (!embedding) return;
 
-        // Constraint: Search 3 candidates
-        const candidates = await upstashService.findSimilarPRs(embedding, 3);
+        // Discovery Pool: Fetch 8 candidates to bypass noise, will be pruned in reasoning phase
+        const candidates = await upstashService.findSimilarPRs(embedding, 8);
         const validCandidates = candidates.filter(c => c.id !== pr.number.toString());
         
         const bestCandidate = validCandidates[0];
