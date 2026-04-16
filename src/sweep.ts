@@ -39,21 +39,46 @@ async function main() {
   }
 
   try {
-    // 0. Fetch PR history
-    console.log(`🔍 Phase 0: Fetching PR history (Target: ${limit})...`);
-    let prs: any[] = [];
-    const iterator = octokit.paginate.iterator(octokit.pulls.list, {
-      owner, repo, state: "open", per_page: 100
+    // 0. Fetch PR history with Callback Sieve
+    console.log(`🔍 Phase 0: Fetching relevant PR history (Target: ${limit})...`);
+    let fetchedCount = 0;
+    let filteredOutCount = 0;
+
+    const prs = await octokit.paginate(octokit.pulls.list, {
+      owner,
+      repo,
+      state: "open",
+      per_page: 100
+      // Default Sort: created, Direction: desc
+    }, (response, done) => {
+      const filteredChunk = response.data.filter((pr: any) => {
+        if (fetchedCount >= limit) return false;
+
+        // 1. Skip Bot PRs
+        const isBot = pr.user?.type === 'Bot' || pr.user?.login.includes('[bot]');
+        
+        // 2. Skip Drafts
+        const isDraft = pr.draft === true;
+
+        // 3. Target Branch Filtering (main/master/devel)
+        const isValidBranch = ['main', 'master', 'devel'].includes(pr.base.ref);
+
+        if (isBot || isDraft || !isValidBranch) {
+          filteredOutCount++;
+          return false;
+        }
+
+        fetchedCount++;
+        return true;
+      });
+
+      // Stop fetching if we've fulfilled the requested limit
+      if (fetchedCount >= limit) done();
+
+      return filteredChunk;
     });
 
-    for await (const { data } of iterator) {
-      prs.push(...data);
-      if (prs.length >= limit) {
-        prs = prs.slice(0, limit);
-        break;
-      }
-    }
-    console.log(`✅ Collected ${prs.length} PRs.\n`);
+    console.log(`✅ Collected ${prs.length} relevant PRs (Filtered out ${filteredOutCount} bots/drafts).`);
 
     const DEDUPE_THRESHOLD = 0.85; 
     const prCache: Record<number, { patch: string; embedding: number[]; title?: string; author?: string }> = {}; 
@@ -68,8 +93,6 @@ async function main() {
         process.stdout.write(`\r[${i + 1}/${prs.length}] Ingesting: "${pr.title.substring(0, 30)}..."`);
         
         try {
-          if (pr.state !== 'open') continue;
-          
           await new Promise(r => setTimeout(r, 1000)); 
           const filesRes = await octokit.pulls.listFiles({ owner, repo, pull_number: pr.number });
           
@@ -131,7 +154,7 @@ async function main() {
             if (!patch.trim()) return;
 
             embedding = await geminiService.generateEmbedding(patch);
-            prCache[pr.number] = { title: pr.title, author: pr.user.login, embedding, patch };
+            prCache[pr.number] = { title: pr.title, author: pr.user?.login || "unknown", embedding, patch };
           } catch (err) {
             return;
           }
@@ -189,7 +212,7 @@ async function main() {
          // USE UNIFIED SERVICE LAYER (Gemini -> Groq Fallback)
          const analysis = await triageService.performDeepAnalysis(
            incomingPatch,
-           { number: pr.number, title: pr.title, author: pr.user.login },
+           { number: pr.number, title: pr.title, author: pr.user?.login || "unknown" },
            candidateDetails,
            null // Constraint: Vision explicitly disabled for sweep
          );
