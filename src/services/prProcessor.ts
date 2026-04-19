@@ -36,7 +36,7 @@ export class PRProcessor {
 
     // 3. Performance Triage
     this.logDetectionStart(pr, author);
-    
+
     process.stdout.write(`${this.colors.yellow}🔍 Scouring Vector Space for semantic siblings...${this.colors.reset}`);
     const review = await triageService.triagePR(octokit as any, owner, repo, pr.number, visionDoc);
     process.stdout.write(` ${this.colors.green}Done.${this.colors.reset}\n`);
@@ -91,7 +91,7 @@ export class PRProcessor {
   private logDetectionStart(pr: any, author: string): void {
     const c = this.colors;
     console.log(`\n${c.cyan}${c.bold}${"=".repeat(60)}${c.reset}`);
-    console.log(`${c.cyan}${c.bold}🛡️  REPO SHIELD SENTINEL:${c.reset} New PR Detected [#${pr.number}]`);
+    console.log(`${c.cyan}${c.bold}🛡️  PR-WATCHER:${c.reset} New PR Detected [#${pr.number}]`);
     console.log(`${c.dim}👤 Author: ${author}${c.reset}`);
     console.log(`${c.dim}📝 Title:  "${pr.title}"${c.reset}`);
     console.log(`${c.cyan}${c.bold}${"=".repeat(60)}${c.reset}`);
@@ -105,31 +105,39 @@ export class PRProcessor {
     console.log(`\n${c.cyan}┌────────────────────────────────────────────────────────────┐${c.reset}`);
     console.log(`${c.cyan}│${c.reset} ${c.bold}${"TRIAGE RESULT: PR #" + prNumber}${c.reset}${"".padEnd(38 - prNumber.toString().length)} ${c.cyan}│${c.reset}`);
     console.log(`${c.cyan}├────────────────────────────────────────────────────────────┤${c.reset}`);
-    
-    const dupeStatus = review.isDuplicate ? `${c.red}❌ REJECTED (Duplicate)${c.reset}` : `${c.green}✅ UNIQUE${c.reset}`;
-    console.log(`${c.cyan}│${c.reset} Duplicate Check: ${dupeStatus.padEnd(review.isDuplicate ? 48 : 36)} ${c.cyan}│${c.reset}`);
-    
+
+    let statusLabel = "Duplicate Check:";
+    let statusValue = `${c.green} UNIQUE${c.reset}`;
+    let matchLine = "";
+
     if (review.isDuplicate) {
+      statusLabel = "Duplicate PR:   ";
       const dupeId = review.duplicateOfUrl?.split('/').pop() || "unknown";
-      console.log(`${c.cyan}│${c.reset} Matches PR:      ${(c.yellow + "#" + dupeId + c.reset).padEnd(52)} ${c.cyan}│${c.reset}`);
+      statusValue = `${c.red} Duplicates (#${dupeId})${c.reset}`;
+    } else if (review.type === "complementary") {
+      statusLabel = "Relevant PR:    ";
+      const dupeId = review.duplicateOfUrl?.split('/').pop() || "unknown";
+      statusValue = `${c.cyan} COMPLEMENTARY (#${dupeId})${c.reset}`;
     }
+
+    console.log(`${c.cyan}│${c.reset} ${statusLabel} ${statusValue.padEnd(review.type === "complementary" ? 54 : 48)} ${c.cyan}│${c.reset}`);
 
     const visionStatus = review.alignsWithVision ? `${c.green}✅ ALIGNED${c.reset}` : `${c.red}🚩 MISMATCH (Violation)${c.reset}`;
     console.log(`${c.cyan}│${c.reset} Project Align:   ${visionStatus.padEnd(review.alignsWithVision ? 36 : 48)} ${c.cyan}│${c.reset}`);
-    
+
     const scoreColor = review.qualityScore > 7 ? c.green : (review.qualityScore > 4 ? c.yellow : c.red);
     console.log(`${c.cyan}│${c.reset} Quality Score:   ${(scoreColor + review.qualityScore + "/10" + c.reset).padEnd(48)} ${c.cyan}│${c.reset}`);
-    
+
     console.log(`${c.cyan}├────────────────────────────────────────────────────────────┤${c.reset}`);
     console.log(`${c.cyan}│${c.reset} ${c.bold}AI Reasoning:${c.reset}${"".padEnd(46)} ${c.cyan}│${c.reset}`);
-    
+
     // Wrap reasoning text
     const reasoning = review.reasoning.substring(0, 110) + (review.reasoning.length > 110 ? "..." : "");
     const lines = reasoning.match(/.{1,56}/g) || [];
     lines.forEach(line => {
       console.log(`${c.cyan}│${c.reset} ${c.dim}${line.padEnd(58)}${c.reset} ${c.cyan}│${c.reset}`);
     });
-    
+
     console.log(`${c.cyan}└────────────────────────────────────────────────────────────┘${c.reset}\n`);
   }
 
@@ -140,7 +148,7 @@ export class PRProcessor {
     const { owner, repo } = context.repo();
     const prNumber = context.payload.pull_request.number;
     const labels = [];
-    
+
     if (review.isDuplicate) labels.push("duplicate");
     if (!review.alignsWithVision) labels.push("alignment-mismatch");
 
@@ -151,16 +159,33 @@ export class PRProcessor {
         issue_number: prNumber,
         labels
       });
+    }
 
-      let commentBody = "";
-      if (review.isDuplicate) {
-        commentBody += `⚠️ **Duplicate PR Detected**\nThis looks like a duplicate of ${review.duplicateOfUrl}.\n\n`;
-      }
-      if (!review.alignsWithVision) {
-        commentBody += `🚩 **Project Alignment Mismatch**\nThis PR does not appear to align with core project goals.\n\n`;
-      }
-      commentBody += `**AI Reasoning:** ${review.reasoning}\n\n**Quality Score:** ${review.qualityScore}/10`;
+    let commentBody = "";
+    if (review.isDuplicate) {
+      const dupeId = review.duplicateOfUrl?.split('/').pop() || "unknown";
+      commentBody += `🤖 **PR-watcher Context Suggestion**\nI noticed this PR shares significant logic or structure with #${dupeId} (${review.duplicateOfUrl}).\n\n`;
 
+      switch (review.type) {
+        case "shadow":
+          commentBody += `**Relationship Pattern:** 👯 Near-Identical Replica (Shadow)\n`;
+          break;
+        case "superset":
+          commentBody += `**Relationship Pattern:** 📦 Broader Implementation (Superset)\n`;
+          break;
+        case "competing":
+          commentBody += `**Relationship Pattern:** ⚔️ Alternative Approach (Competing)\n`;
+          break;
+      }
+      commentBody += `\n**AI Reasoning:** ${review.reasoning}\n\n*Note: This is an automated suggestion to assist maintainers.*`;
+    } else if (review.type === "complementary") {
+      const dupeId = review.duplicateOfUrl?.split('/').pop() || "unknown";
+      commentBody += `🤝 **PR-watcher Context Suggestion**\nI noticed this PR is a **Complementary Fix** related to #${dupeId} (${review.duplicateOfUrl}).\n\n**Architectural Reasoning:** ${review.reasoning}\n\n*Note: They address the same overarching issue but modify different files, so they can likely be safely reviewed and merged together.*`;
+    } else if (!review.alignsWithVision) {
+      commentBody += `🚩 **Project Alignment Suggestion**\nThis PR might conflict with core project architectural goals defined in VISION.md.\n\n**AI Reasoning:** ${review.reasoning}\n\n*Note: This is an automated suggestion to assist maintainers.*`;
+    }
+
+    if (commentBody.length > 0) {
       await context.octokit.issues.createComment(context.issue({ body: commentBody }));
     }
   }
@@ -175,11 +200,27 @@ export class PRProcessor {
 
     try {
       const filesRes = await context.octokit.pulls.listFiles({ owner, repo, pull_number: pr.number });
-      const patch = filesRes.data.map(f => f.patch || "").join("\n");
-      const embedding = await geminiService.generateEmbedding(patch);
-      
+
+      // Prevent massive PRs from destroying memory/tokens
+      if (filesRes.data.length > 15) {
+        context.log.warn(`PR #${pr.number} has ${filesRes.data.length} files. Skipping memory sync.`);
+        return;
+      }
+
+      const { ContextOptimizer } = await import("./optimizer.js");
+      const rawPatch = filesRes.data.map(f => `--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch || ""}`).join("\n");
+      const patch = ContextOptimizer.cleanDiff(rawPatch, 1500);
+
+      if (!patch.trim()) {
+        context.log.info(`PR #${pr.number} has empty patch mostly. Skipping sync.`);
+        return;
+      }
+
+      const embedding = await geminiService.generateEmbedding(patch, pr.title);
+
       if (embedding.length) {
-        const namespace = `${owner}/${repo}`;
+        // Use hyphen instead of slash to avoid breaking the Upstash REST endpoint
+        const namespace = `${owner}-${repo}`;
         await upstashService.upsertPREmbedding(pr.number.toString(), embedding, {
           pr_number: pr.number,
           pr_url: pr.html_url,

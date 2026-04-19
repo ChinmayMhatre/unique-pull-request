@@ -51,7 +51,6 @@ interface LLMEntry {
   primaryMatchUrl?: string;
   reasoning: string;
   qualityScore: number;
-  autoFlagged: boolean;
   llmProvider: string; // Dynamic provider/model name
   modelUsed?: string;
 }
@@ -116,7 +115,6 @@ async function main() {
   }
 
   const DEDUPE_THRESHOLD = 0.85;
-  const AUTO_FLAG_THRESHOLD = 0.97;
   const namespace = `${owner}-${repo}`;
 
   // ─── Init Logger ────────────────────────────────────────────────────────────
@@ -132,7 +130,7 @@ async function main() {
     limit,
     mode: isResume ? 'resume' : 'fresh',
     timestamp: new Date().toISOString(),
-    thresholds: { similarityMin: DEDUPE_THRESHOLD, autoFlag: AUTO_FLAG_THRESHOLD },
+    thresholds: { similarityMin: DEDUPE_THRESHOLD },
   });
 
   const octokit = new ProbotOctokit({
@@ -248,7 +246,7 @@ async function main() {
           const isRefresh = !!meta;
           process.stdout.write(`\r[${i + 1}/${prs.length}] ${isRefresh ? '🔄 Refreshing' : '📥 Ingesting'}: #${pr.number}`.padEnd(70));
 
-          await new Promise(r => setTimeout(r, 1000));
+          await new Promise(r => setTimeout(r, 4000)); // Throttled for Gemini 2 Free Tier (15 RPM)
           const filesRes = await octokit.pulls.listFiles({ owner, repo, pull_number: pr.number });
 
           if (filesRes.data.length > 15) {
@@ -441,16 +439,12 @@ async function main() {
         raw_queue_size: reasoningQueue.length,
         after_dedup: dedupedQueue.length,
         pairs_eliminated_by_dedup: reasoningQueue.length - dedupedQueue.length,
-        auto_flag_candidates: dedupedQueue.filter(({ validCandidates }) =>
-          (validCandidates[0]?.score || 0) >= AUTO_FLAG_THRESHOLD
-        ).length,
       },
       queue: dedupedQueue.map(({ pr, validCandidates }) => ({
         pr_number: pr.number,
         pr_title: pr.title,
         pr_url: pr.html_url,
         pr_author: pr.user?.login,
-        will_auto_flag: (validCandidates[0]?.score || 0) >= AUTO_FLAG_THRESHOLD,
         top_candidate: {
           id: validCandidates[0]?.id,
           score: validCandidates[0]?.score,
@@ -476,33 +470,8 @@ async function main() {
 
       process.stdout.write(`\r[${i + 1}/${dedupedQueue.length}] Reasoning Judge: #${pr.number}...`.padEnd(60));
 
-      // --- Auto-flag at ≥0.97: trust the vector ---
-      const topScore = validCandidates[0]?.score || 0;
-      if (topScore >= AUTO_FLAG_THRESHOLD) {
-        const autoResult: LLMEntry = {
-          number: pr.number,
-          title: pr.title,
-          url: pr.html_url,
-          isDuplicate: true,
-          type: 'shadow',
-          primaryMatchPr: parseInt(validCandidates[0].id),
-          primaryMatchUrl: validCandidates[0]?.metadata?.pr_url as string,
-          reasoning: `Vector similarity ${topScore.toFixed(4)} ≥ ${AUTO_FLAG_THRESHOLD} — near-identical diff fingerprint. LLM analysis skipped.`,
-          qualityScore: 0,
-          autoFlagged: true,
-          llmProvider: 'auto_vector',
-        };
-        llmLog.push(autoResult);
-        results.push({
-          number: pr.number,
-          type: 'shadow',
-          duplicateOf: `#${validCandidates[0].id}`,
-          reasoning: autoResult.reasoning,
-        });
-        process.stdout.write("\n");
-        console.log(`   ⚡ [PR #${pr.number}] AUTO-FLAGGED (Score: ${topScore.toFixed(4)}) → #${validCandidates[0].id}`);
-        continue;
-      }
+      // --- (REMOVED) Auto-flag logic ---
+      // Force all candidates to the reasoning judge for 100% semantic accuracy.
 
       try {
         // --- Smart Pacing ---
@@ -560,7 +529,6 @@ async function main() {
           primaryMatchUrl,
           reasoning: analysis.reasoning,
           qualityScore: analysis.qualityScore,
-          autoFlagged: false,
           llmProvider: analysis.modelId || 'unknown',
           modelUsed: analysis.modelId,
         };
@@ -592,8 +560,6 @@ async function main() {
         total_analyzed: llmLog.length,
         duplicates_found: llmLog.filter(e => e.isDuplicate).length,
         unique: llmLog.filter(e => !e.isDuplicate).length,
-        auto_flagged_by_vector: llmLog.filter(e => e.autoFlagged).length,
-        llm_calls_made: llmLog.filter(e => !e.autoFlagged).length,
         model_usage: modelRouter.getUsageSummary(),
         type_breakdown: llmLog
           .filter(e => e.isDuplicate)
@@ -646,8 +612,6 @@ async function main() {
       },
       reasoning: {
         total_analyzed: llmLog.length,
-        auto_flagged_by_vector: llmLog.filter(e => e.autoFlagged).length,
-        sent_to_llm: llmLog.filter(e => !e.autoFlagged).length,
         duplicates_found: results.length,
         type_breakdown: results.reduce((acc, r) => {
           acc[r.type] = (acc[r.type] || 0) + 1;

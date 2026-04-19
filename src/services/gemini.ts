@@ -9,7 +9,7 @@ const genAI = new GoogleGenerativeAI(apiKey);
 
 export interface AnalysisResult {
   isDuplicate: boolean;
-  type: 'unique' | 'shadow' | 'superset' | 'competing';
+  type: 'unique' | 'shadow' | 'superset' | 'competing' | 'complementary';
   confidence: number;
   primaryMatchPr?: number;
   reasoning: string;
@@ -20,45 +20,24 @@ export interface AnalysisResult {
 
 export class GeminiService {
   /**
-   * Generates embeddings using direct fetch call to the stable v1 endpoint.
+   * Generates enriched embeddings using Gemini 2's native 1536D output.
+   * Eliminates the need for manual vector slicing and preserves semantic fidelity.
    */
-  async generateEmbedding(text: string): Promise<number[]> {
+  async generateEmbedding(text: string, title?: string): Promise<number[]> {
     try {
-      // Use the stable v1 endpoint for the modern embedding model
-      const url = `https://generativelanguage.googleapis.com/v1/models/text-embedding-004:embedContent?key=${apiKey}`;
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content: { parts: [{ text }] },
-          outputDimensionality: 1536
-        })
-      });
+      const model = genAI.getGenerativeModel({ model: "gemini-embedding-2-preview" });
+      const fullText = title ? `TITLE: ${title}\nDIFF:\n${text}` : text;
 
-      if (!response.ok) {
-        throw new Error(`Embedding API Error: ${response.statusText}`);
-      }
+      const result = await model.embedContent({
+        content: { parts: [{ text: fullText }] },
+        taskType: 1, // RETRIEVAL_DOCUMENT
+        outputDimensionality: 1536
+      } as any);
 
-      const data = await response.json() as any;
-      let values = data.embedding.values;
-
-      // Explicitly truncate/pad if necessary to match the 1536 expected by Upstash
-      if (values.length > 1536) {
-        values = values.slice(0, 1536);
-      }
-
-      return values;
+      return result.embedding.values;
     } catch (error) {
-      console.error("Gemini Embedding Error:", error);
-      // Fallback with modern model
-      const model = genAI.getGenerativeModel({ model: "text-embedding-004" });
-      const result = await model.embedContent(text);
-      let values = result.embedding.values;
-
-      if (values.length > 1536) {
-        values = values.slice(0, 1536);
-      }
-      return values;
+      console.error("Gemini 2 Embedding Error:", error);
+      throw error;
     }
   }
 
@@ -133,38 +112,48 @@ ${visionSection}
 1. "superset": The PRs solve the same problem, but one PR completely encompasses the other's logic while providing additional coverage, files, or fixes.
 2. "shadow": The PRs solve the EXACT same problem with nearly identical logic, files, and scope.
 3. "competing": Both PRs solve the same bug/feature but with conflicting architectural approaches or divergent code paths.
-4. "unique": No significant logic overlap between this PR and the candidate.
+4. "complementary": Both PRs address the exact same bug/feature but modify completely disjoint files. These are technically redundant in goal but not in execution.
+5. "unique": No significant logic overlap between this PR and the candidate.
 
-[Structural Awareness Guidelines]
-- IMPORTANT: If "Path Intersection" is 0 (DISJOINT), the PRs are likely COMPLEMENTARY fixes for different files, not duplicates. 
-- Only flag disjoint PRs as duplicates if one PR is a verified architectural replacement (Superset/Competing) for the other as specified in project-specific rules or vision.
-- For Registry/JSON list files: Logic replication (e.g., adding an entry to the same array) is NOT a duplicate if the entries themselves are unique.
+[Holistic Evaluation Rule]
+- You are provided with up to 3 candidates. You MUST evaluate the relationship between the CURRENT PR and EVERY candidate separately before deciding on the final categorization.
+- Priority: If ANY candidate is a "shadow" or "superset", the PR is a Duplicate.
+- Core Goal: If the CURRENT PR and a candidate address the same functional root cause or logic failure, even if their structural implementation (file paths or line ranges) differ slightly, they should be considered redundant.
+
+[Semantic Payload Verification]
+- Values Matter: Extract and compare the literal semantic payloads (identifiers, logic-level values, specific metadata constants).
+- **Hardening Rule**: If the PRs modify a DATA-DRIVEN configuration file (e.g., registries, directories, package-lists), the literal string values are the primary differentiator. If unique identifiers (URLs, names) differ, categorize as UNIQUE regardless of structural similarity.
+- If the changes introduce distinct semantic entities or divergent logic branches, categorize as UNIQUE.
+- If the changes target the same logic-level state or configuration with equivalent outcomes, categorize as DUPLICATE.
 
 [Categorization Hierarchy]
 If a PR pair qualifies for multiple categories, apply this order of precedence:
 1. "superset" (Highest)
-2. "shadow" (Use if scopes and target files are identical)
-3. "competing" (Use if goals align but implementations clash)
-4. "unique" (Lowest fallback)
+2. "shadow"
+3. "competing"
+4. "complementary"
+5. "unique" (Lowest fallback)
 
 [Output Format]
 Return ONLY a JSON object with:
 {
-  "isDuplicate": boolean,
-  "type": "unique" | "shadow" | "superset" | "competing",
+  "isDuplicate": boolean (MUST be true for "shadow", "superset", or "competing"),
+  "type": "unique" | "complementary" | "shadow" | "superset" | "competing",
   "confidence": number (0-1),
-  "primaryMatchPr": number | null,
-  "reasoning": "Concise architectural explanation explaining both logic and structural overlap.",
-  "alignsWithVision": boolean (default true if no vision doc provided),
-  "qualityScore": number (1-10, assess code structure and clarity)
+  "primaryMatchPr": number | null (The ID of the candidate that triggered the duplicate/overlap status),
+  "reasoning": "Concise architectural explanation of your decision for the primary match.",
+  "alignsWithVision": boolean,
+  "qualityScore": number (1-10)
 }
 `;
 
     try {
       const result = await model.generateContent(prompt);
       const response = JSON.parse(result.response.text());
+      console.log(`\n   🔍 [PR #${incomingMetadata.number}] RAW LLM RESULT:`, JSON.stringify(response, null, 2));
+
       return {
-        isDuplicate: response.isDuplicate || false,
+        isDuplicate: response.type === 'complementary' ? false : (response.isDuplicate || false),
         type: response.type || 'unique',
         confidence: response.confidence || 0,
         primaryMatchPr: response.primaryMatchPr || undefined,

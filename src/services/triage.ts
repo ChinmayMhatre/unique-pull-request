@@ -37,29 +37,33 @@ export class TriageService {
       }
       
       const { ContextOptimizer } = await import("./optimizer.js");
-      const rawPatch = filesRes.data.map((f: any) => f.patch || "").join("\n");
+      const rawPatch = filesRes.data.map((f: any) => `--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch || ""}`).join("\n");
       const combinedPatch = ContextOptimizer.cleanDiff(rawPatch, 1500);
 
       if (!combinedPatch.trim()) return null;
 
       // 2. Generate Embedding & Search
-      const embedding = await geminiService.generateEmbedding(combinedPatch);
+      const embedding = await geminiService.generateEmbedding(combinedPatch, pr.title);
       if (!embedding.length) return null;
 
-      const namespace = `${owner}/${repo}`;
+      // Use hyphen instead of slash to avoid breaking the Upstash REST endpoint
+      const namespace = `${owner}-${repo}`;
       // Broaden the net: Fetch 8 candidates to bypass structural noise, but prune later
       const similarPRs = await upstashService.findSimilarPRs(embedding, namespace, 8);
       const validCandidates = similarPRs.filter((m: any) => {
          const meta = m.metadata as unknown as PRMetadata;
-         return meta.pr_number !== prNumber && (m.score || 0) > 0.85;
+         return meta.pr_number !== prNumber && (m.score || 0) > 0.80;
       });
 
-      // 3. Fetch Candidate Details
+      // 3. (REMOVED) Auto-Flag Check - Now forcing LLM analysis for all candidates
+
+      // 4. Fetch Candidate Details for LLM
       const candidates = await Promise.all(validCandidates.map(async (m: any) => {
         const meta = m.metadata as unknown as PRMetadata;
         try {
-          const histFiles = await octokit.pulls.listFiles({ owner, repo, pull_number: meta.pr_number, per_page: 100 });
-          const histPatch = histFiles.data.map((f: any) => f.patch || "").join("\n");
+          const [histOwner, histRepo] = meta.repo_name.split('/');
+          const histFiles = await octokit.pulls.listFiles({ owner: histOwner, repo: histRepo, pull_number: meta.pr_number, per_page: 100 });
+          const histPatch = histFiles.data.map((f: any) => `--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch || ""}`).join("\n");
           return {
             number: meta.pr_number,
             title: meta.title,
@@ -75,7 +79,7 @@ export class TriageService {
 
       const activeCandidates = candidates.filter(c => c !== null) as any[];
 
-      // 4. Perform Unified Deep Analysis
+      // 5. Perform Unified Deep Analysis
       const analysis = await this.performDeepAnalysis(
         rawPatch,
         { number: pr.number, title: pr.title, author: pr.user.login },
@@ -85,7 +89,7 @@ export class TriageService {
 
       // Map primary match URL for reporting
       let duplicateOfUrl = undefined;
-      if (analysis.isDuplicate && analysis.primaryMatchPr) {
+      if ((analysis.isDuplicate || analysis.type === 'complementary') && analysis.primaryMatchPr) {
         const match = activeCandidates.find(c => c.number === analysis.primaryMatchPr);
         duplicateOfUrl = match?.url;
       }
@@ -153,8 +157,8 @@ export class TriageService {
         // --- SANITY CHECK: Ensure type 'unique' never has isDuplicate = true ---
         if (result.type === 'unique') {
           result.isDuplicate = false;
-        } else if (!result.isDuplicate) {
-          // If already flagged as false, ensure type is recorded as unique
+        } else if (!result.isDuplicate && result.type !== 'complementary') {
+          // If already flagged as false and NOT complementary, ensure type is recorded as unique
           result.type = 'unique';
         }
 
@@ -169,16 +173,11 @@ export class TriageService {
         
         const isPersistentServiceErr = err?.message?.includes('503') || err?.message?.includes('504');
 
-        if (isRateLimit || isPersistentServiceErr) {
-          // If it's a persistent 503, cooler down for this session
-          modelRouter.markRateLimited(model.id);
-          console.warn(`🔄 ${isRateLimit ? "Rate limit" : "Persistent 503"} hit. Falling back to next available model...`);
-          continue; // Try next model in loop
-        }
-
-        // For other errors, log and bubble up
-        console.error(`⚠️  Model ${model.id} failed with non-recoverable error:`, err.message);
-        throw err;
+        // Sidelining: If it's a rate limit or ANY persistent error (like 404 or 503 after retries),
+        // we blacklist the model for this session so the sweep can continue.
+        modelRouter.markRateLimited(model.id);
+        console.warn(`🔄 Model ${model.id} failed (${err.message}). Falling back to next available provider...`);
+        continue;
       }
     }
   }

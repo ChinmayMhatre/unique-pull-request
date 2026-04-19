@@ -25,18 +25,18 @@ class ModelRouter {
   private readonly REASONING_MODELS: ModelConfig[] = [
     // 1. Primary: Gemini 3 Flash (per user feedback)
     { id: 'gemini-flash-latest', provider: 'gemini', rpm: 5, rpd: 20, tpm: 250000 },
-    
+
     // 2. High Context Powerhouse: Llama 4 Scout (Groq)
     { id: 'meta-llama/llama-4-scout-17b-16e-instruct', provider: 'groq', rpm: 30, rpd: 1000, tpm: 30000 },
-    
+
     // 3. Reliable Fallback: Llama 3.3 70B (Groq)
     { id: 'llama-3.3-70b-versatile', provider: 'groq', rpm: 30, rpd: 1000, tpm: 12000 },
-    
+
     // 4. Stable Gemini fallbacks
     { id: 'gemini-2.0-flash', provider: 'gemini', rpm: 5, rpd: 20, tpm: 250000 },
     { id: 'gemini-1.5-flash', provider: 'gemini', rpm: 15, rpd: 1500, tpm: 250000 },
-    
-    // 5. High-volume Groq fallbacks
+
+    // 6. High-volume Groq fallbacks
     { id: 'llama-3.1-8b-instant', provider: 'groq', rpm: 30, rpd: 14400, tpm: 6000 },
     { id: 'allam-2-7b', provider: 'groq', rpm: 30, rpd: 7000, tpm: 6000 },
   ];

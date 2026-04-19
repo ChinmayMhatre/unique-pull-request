@@ -77,30 +77,38 @@ ${visionSection}
 1. "superset": The PRs solve the same problem, but one PR completely encompasses the other's logic while providing additional coverage, files, or fixes.
 2. "shadow": The PRs solve the EXACT same problem with nearly identical logic, files, and scope.
 3. "competing": Both PRs solve the same bug/feature but with conflicting architectural approaches or divergent code paths.
-4. "unique": No significant logic overlap between this PR and the candidate.
+4. "complementary": Both PRs address the exact same bug/feature but modify completely disjoint files. These are technically redundant in goal but not in execution.
+5. "unique": No significant logic overlap between this PR and the candidate.
 
-[Structural Awareness Guidelines]
-- IMPORTANT: If "Path Intersection" is 0 (DISJOINT), the PRs are likely COMPLEMENTARY fixes for different files, not duplicates. 
-- Only flag disjoint PRs as duplicates if one PR is a verified architectural replacement (Superset/Competing) for the other as specified in project-specific rules or vision.
-- For Registry/JSON list files: Logic replication (e.g., adding an entry to the same array) is NOT a duplicate if the entries themselves are unique.
+[Holistic Evaluation Rule]
+- You are provided with up to 3 candidates. You MUST evaluate the relationship between the CURRENT PR and EVERY candidate separately before deciding on the final categorization.
+- Priority: If ANY candidate is a "shadow" or "superset", the PR is a Duplicate.
+- Core Goal: If the CURRENT PR and a candidate address the same functional root cause or logic failure, even if their structural implementation (file paths or line ranges) differ slightly, they should be considered redundant.
+
+[Semantic Payload Verification]
+- Values Matter: Extract and compare the literal semantic payloads (identifiers, logic-level values, specific metadata constants).
+- **Hardening Rule**: If the PRs modify a DATA-DRIVEN configuration file (e.g., registries, directories, package-lists), the literal string values are the primary differentiator. If unique identifiers (URLs, names) differ, categorize as UNIQUE regardless of structural similarity.
+- If the changes introduce distinct semantic entities or divergent logic branches, categorize as UNIQUE.
+- If the changes target the same logic-level state or configuration with equivalent outcomes, categorize as DUPLICATE.
 
 [Categorization Hierarchy]
 If a PR pair qualifies for multiple categories, apply this order of precedence:
 1. "superset" (Highest)
-2. "shadow" (Use if scopes and target files are identical)
-3. "competing" (Use if goals align but implementations clash)
-4. "unique" (Lowest fallback)
+2. "shadow"
+3. "competing"
+4. "complementary"
+5. "unique" (Lowest fallback)
 
 [Output Format]
 Return ONLY a JSON object with:
 {
-  "isDuplicate": boolean,
-  "type": "unique" | "shadow" | "superset" | "competing",
+  "isDuplicate": boolean (MUST be true for "shadow", "superset", or "competing"),
+  "type": "unique" | "complementary" | "shadow" | "superset" | "competing",
   "confidence": number (0-1),
-  "primaryMatchPr": number | null,
-  "reasoning": "Concise architectural explanation explaining both logic and structural overlap.",
-  "aligns_with_vision": boolean,
-  "quality_score": number
+  "primaryMatchPr": number | null (The ID of the candidate that triggered the duplicate/overlap status),
+  "reasoning": "Concise architectural explanation of your decision for the primary match.",
+  "alignsWithVision": boolean,
+  "qualityScore": number (1-10)
 }
 `;
 
@@ -122,19 +130,12 @@ Return ONLY a JSON object with:
         confidence: result.confidence || 0,
         primaryMatchPr: result.primaryMatchPr || undefined,
         reasoning: result.reasoning || "No reasoning provided.",
-        alignsWithVision: result.aligns_with_vision ?? true,
-        qualityScore: result.quality_score || 5
+        alignsWithVision: result.alignsWithVision ?? true,
+        qualityScore: result.qualityScore || 5
       };
     } catch (error) {
       console.error("❌ Groq reasoning pass failed:", error);
-      return { 
-        isDuplicate: false, 
-        type: "unique", 
-        confidence: 0, 
-        reasoning: "Groq Error",
-        alignsWithVision: true,
-        qualityScore: 5
-      };
+      throw error; // Rethrow so TriageService can handle the fallback logic
     }
   }
 }
