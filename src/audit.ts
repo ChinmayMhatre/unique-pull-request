@@ -55,9 +55,9 @@ interface LLMEntry {
   modelUsed?: string;
 }
 
-// ─── SweepLogger ──────────────────────────────────────────────────────────────
+// ─── AuditLogger ──────────────────────────────────────────────────────────────
 
-class SweepLogger {
+class AuditLogger {
   public logDir: string;
   public phaseTimings: Record<string, number> = {};
   private startTime: number;
@@ -104,7 +104,7 @@ async function main() {
   const repoFullPath = args.find(a => a.includes("/"));
 
   if (!repoFullPath) {
-    console.error("Usage: npm run sweep <owner>/<repo> [--resume] [--limit N]");
+    console.error("Usage: npm run audit <owner>/<repo> [--resume] [--limit N]");
     process.exit(1);
   }
 
@@ -118,10 +118,10 @@ async function main() {
   const namespace = `${owner}-${repo}`;
 
   // ─── Init Logger ────────────────────────────────────────────────────────────
-  const logger = new SweepLogger(repoFullPath);
+  const logger = new AuditLogger(repoFullPath);
 
   console.log("\n" + "=".repeat(60));
-  console.log(`🛡️  RepoShield Unified Sentinel Sweep: ${owner}/${repo}`);
+  console.log(`🛡️  RepoShield Unified Sentinel Audit: ${owner}/${repo}`);
   console.log(`🚀 Mode: ${isResume ? "RESUME" : "FRESH"} | Limit: ${limit}`);
   console.log("=".repeat(60) + "\n");
 
@@ -510,7 +510,7 @@ async function main() {
           incomingPatch,
           { number: pr.number, title: pr.title, author: pr.user?.login || "unknown" },
           candidateDetails,
-          null // Vision alignment disabled for sweep
+          null // Vision alignment disabled for audit
         );
 
         const matchCandidate = candidateDetails.find(c => c.number === analysis.primaryMatchPr);
@@ -633,7 +633,7 @@ async function main() {
     console.log(`📁 Full logs → ${logger.logDir}\n`);
 
   } catch (e: any) {
-    console.error("\n❌ Fatal Error during sweep:", e);
+    console.error("\n❌ Fatal Error during audit:", e);
     await logger.write('error.json', { fatal: e?.message, stack: e?.stack }).catch(() => { });
   }
 }

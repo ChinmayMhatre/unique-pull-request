@@ -101,7 +101,7 @@ class ModelRouter {
   }
 
   /**
-   * Resets all rate limit flags (useful between sweep phases if needed).
+   * Resets all rate limit flags (useful between audit phases if needed).
    */
   resetRateLimits() {
     this.REASONING_MODELS.forEach(m => {

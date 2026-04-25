@@ -42,7 +42,7 @@ export class GeminiService {
   }
 
   /**
-   * Primary deep reasoning engine for both Bot and Sweep flows.
+   * Primary deep reasoning engine for both Bot and Audit flows.
    */
   async analyzeRedundancy(
     rawIncomingDiff: string,

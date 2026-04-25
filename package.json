@@ -15,7 +15,7 @@
     "build": "tsc",
     "start": "probot run ./lib/index.js",
     "test": "UPSTASH_VECTOR_REST_URL=http://dummy UPSTASH_VECTOR_REST_TOKEN=dummy vitest",
-    "sweep": "node ./lib/sweep.js",
+    "audit": "node ./lib/audit.js",
     "probe": "tsc && node ./lib/probe-models.js"
   },
   "dependencies": {

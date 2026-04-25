@@ -109,7 +109,7 @@ export class TriageService {
   }
 
   /**
-   * Shared reasoning engine for both Bot and Sweep flows.
+   * Shared reasoning engine for both Bot and Audit flows.
    * Orchestrates automatic fallback across prioritized Gemini and Groq models.
    */
   async performDeepAnalysis(
@@ -174,7 +174,7 @@ export class TriageService {
         const isPersistentServiceErr = err?.message?.includes('503') || err?.message?.includes('504');
 
         // Sidelining: If it's a rate limit or ANY persistent error (like 404 or 503 after retries),
-        // we blacklist the model for this session so the sweep can continue.
+        // we blacklist the model for this session so the audit can continue.
         modelRouter.markRateLimited(model.id);
         console.warn(`🔄 Model ${model.id} failed (${err.message}). Falling back to next available provider...`);
         continue;
