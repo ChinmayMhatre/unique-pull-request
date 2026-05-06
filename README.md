@@ -113,6 +113,3 @@ For a detailed breakdown of the log file contents, see [LOGS_STRUCTURE.md](LOGS_
 Suggestions and bug reports are welcome via Issues!
 
 For more, check out the [Contributing Guide](CONTRIBUTING.md).
-
-## 📄 License
-[ISC](LICENSE) © 2026 Chinmay
