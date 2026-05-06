@@ -9,6 +9,7 @@ export interface PRMetadata {
   title: string;
   repo_name: string;    // Required for multi-repo isolation
   latest_sha: string;   // Required for cache-busting (SHA fingerprinting)
+  body?: string;        // Up to 500 characters of the PR description
 }
 
 export class UpstashService {

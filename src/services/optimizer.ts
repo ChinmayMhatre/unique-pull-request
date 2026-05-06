@@ -9,6 +9,7 @@ export interface Candidate {
   author: string;
   diff: string;
   score?: number;
+  body?: string;
 }
 
 export class ContextOptimizer {

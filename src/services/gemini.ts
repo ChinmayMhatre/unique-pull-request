@@ -46,8 +46,8 @@ export class GeminiService {
    */
   async analyzeRedundancy(
     rawIncomingDiff: string,
-    incomingMetadata: { number: number; title: string; author: string },
-    rawCandidates: Array<{ number: number; title: string; author: string; diff: string; score?: number }>,
+    incomingMetadata: { number: number; title: string; author: string; body?: string },
+    rawCandidates: Array<{ number: number; title: string; author: string; diff: string; score?: number; body?: string }>,
     visionDoc: string | null = null,
     overrideModelId?: string
   ): Promise<AnalysisResult> {
@@ -70,6 +70,7 @@ export class GeminiService {
 Candidate #${c.number}
 Title: ${c.title}
 Author: ${c.author}
+Description: ${c.body || "None provided"}
 Score: ${(c.score || 0).toFixed(4)}
 [STRUCTURE]
 Modified Files: ${cFiles.length}
@@ -99,6 +100,8 @@ Evaluate if the CURRENT PR aligns with the rules above. Set "alignsWithVision" t
 
 [CURRENT PR]
 #${incomingMetadata.number}: ${incomingMetadata.title}
+Author: ${incomingMetadata.author}
+Description: ${incomingMetadata.body || "None provided"}
 Modified Files: ${incomingFiles.length}
 Scopes: ${incomingScopes.join(", ")}
 Diff:

@@ -68,6 +68,7 @@ export class TriageService {
             number: meta.pr_number,
             title: meta.title,
             author: meta.author,
+            body: meta.body || '',
             diff: histPatch,
             score: m.score,
             url: meta.pr_url
@@ -82,7 +83,7 @@ export class TriageService {
       // 5. Perform Unified Deep Analysis
       const analysis = await this.performDeepAnalysis(
         rawPatch,
-        { number: pr.number, title: pr.title, author: pr.user.login },
+        { number: pr.number, title: pr.title, author: pr.user.login, body: pr.body ? pr.body.substring(0, 500) : '' },
         activeCandidates,
         visionDoc
       );
@@ -112,12 +113,45 @@ export class TriageService {
    * Shared reasoning engine for both Bot and Audit flows.
    * Orchestrates automatic fallback across prioritized Gemini and Groq models.
    */
+  private extractLinkedIssues(body?: string): Set<number> {
+    const issues = new Set<number>();
+    if (!body) return issues;
+    const regex = /(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
+    let match;
+    while ((match = regex.exec(body)) !== null) {
+      issues.add(parseInt(match[1], 10));
+    }
+    return issues;
+  }
+
   async performDeepAnalysis(
     incomingDiff: string,
-    incomingMeta: { number: number, title: string, author: string },
+    incomingMeta: { number: number, title: string, author: string, body?: string },
     candidates: any[],
     visionDoc: string | null = null
   ): Promise<AnalysisResult> {
+    const incomingIssues = this.extractLinkedIssues(incomingMeta.body);
+    if (incomingIssues.size > 0) {
+      for (const c of candidates) {
+        const cIssues = this.extractLinkedIssues(c.body);
+        for (const issue of incomingIssues) {
+          if (cIssues.has(issue)) {
+            console.log(`\n   🎯 [PR #${incomingMeta.number}] DETERMINISTIC MATCH: Both close/fix issue #${issue} (Candidate #${c.number})`);
+            return {
+              isDuplicate: true,
+              type: 'shadow',
+              confidence: 1.0,
+              primaryMatchPr: c.number,
+              reasoning: `Deterministic Match: Both PRs explicitly target and close/fix issue #${issue}.`,
+              alignsWithVision: true,
+              qualityScore: 10,
+              modelId: 'deterministic-regex'
+            };
+          }
+        }
+      }
+    }
+
     const { modelRouter } = await import("./modelRouter.js");
 
     while (true) {

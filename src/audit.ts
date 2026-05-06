@@ -56,7 +56,7 @@ async function main() {
     });
   }
 
-  const prCache: Record<number, { patch: string; embedding: number[]; title?: string; author?: string }> = {};
+  const prCache: Record<number, { patch: string; embedding: number[]; title?: string; author?: string; body?: string }> = {};
 
   // Accumulated log data  
   const ingestionLog: IngestionEntry[] = [];
@@ -180,7 +180,7 @@ async function main() {
           const reductionPct = Math.round((1 - optimizedChars / Math.max(rawChars, 1)) * 100);
 
           const embedding = await geminiService.generateEmbedding(patch);
-          prCache[pr.number] = { patch, embedding, title: pr.title, author: pr.user?.login };
+          prCache[pr.number] = { patch, embedding, title: pr.title, author: pr.user?.login, body: pr.body ? pr.body.substring(0, 500) : '' };
 
           await upstashService.upsertPREmbedding(pr.number.toString(), embedding, {
             pr_number: pr.number,
@@ -190,6 +190,7 @@ async function main() {
             title: pr.title,
             repo_name: `${owner}/${repo}`,
             latest_sha: pr.head.sha,
+            body: pr.body ? pr.body.substring(0, 500) : '',
           }, namespace);
 
           ingestionLog.push({
@@ -264,7 +265,7 @@ async function main() {
             if (!patch.trim()) return;
 
             embedding = await geminiService.generateEmbedding(patch);
-            prCache[pr.number] = { title: pr.title, author: pr.user?.login || "unknown", embedding, patch };
+            prCache[pr.number] = { title: pr.title, author: pr.user?.login || "unknown", embedding, patch, body: pr.body ? pr.body.substring(0, 500) : '' };
           } catch (err: any) {
             errors.push({ phase: 'sieve_embedding', pr: pr.number, message: err?.message });
             return;
@@ -410,6 +411,7 @@ async function main() {
                 number: parseInt(c.id),
                 title: c.metadata.title,
                 author: c.metadata.author,
+                body: c.metadata.body || '',
                 diff: cFiles.data.map((f: any) => `--- a/${f.filename}\n+++ b/${f.filename}\n${f.patch || ""}`).join("\n"),
                 score: c.score,
                 url: c.metadata.pr_url,
@@ -420,7 +422,7 @@ async function main() {
 
         const analysis = await triageService.performDeepAnalysis(
           incomingPatch,
-          { number: pr.number, title: pr.title, author: pr.user?.login || "unknown" },
+          { number: pr.number, title: pr.title, author: pr.user?.login || "unknown", body: prCache[pr.number]?.body || '' },
           candidateDetails,
           null // Vision alignment disabled for audit
         );
