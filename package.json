@@ -1,11 +1,11 @@
 {
-  "name": "repo-shield",
+  "name": "kanteishi",
   "version": "1.0.0",
   "private": true,
-  "description": "duplicate pr detector",
+  "description": "Find duplicate Pull Requests and architectural overlaps to keep your repository clean and organized",
   "author": "Chinmay <chinmaymhatre12@gmail.com>",
   "license": "ISC",
-  "homepage": "https://github.com/chinmay/repo-shield-app",
+  "homepage": "https://github.com/chinmay/kanteishi",
   "keywords": [
     "probot",
     "github",

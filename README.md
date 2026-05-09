@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>🛡️ Unified Sentinel Audit</h1>
+  <h1>🛡️ Kanteishi Audit</h1>
   <p><strong>AI-powered duplicate Pull Request detection for high-traffic repositories.</strong></p>
   
   ![Node.js](https://img.shields.io/badge/Node.js-%3E%3D18-blue)
@@ -9,7 +9,7 @@
 
 <br />
 
-The **Unified Sentinel Audit** is a high-performance CLI tool designed to scan a repository's pull request history for redundancies and architectural duplicates. It identifies when multiple contributors are solving the *same functional problem*, even across different files.
+The **Kanteishi Audit** is a high-performance CLI tool designed to scan a repository's pull request history for redundancies and architectural duplicates. It identifies when multiple contributors are solving the *same functional problem*, even across different files.
 
 ---
 
@@ -20,8 +20,8 @@ The **Unified Sentinel Audit** is a high-performance CLI tool designed to scan a
 Clone the repository and install dependencies:
 
 ```sh
-git clone https://github.com/chinmay/unique-pull-request.git
-cd unique-pull-request
+git clone https://github.com/chinmay/kanteishi.git
+cd kanteishi
 npm install
 ```
 

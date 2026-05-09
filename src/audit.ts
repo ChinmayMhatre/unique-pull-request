@@ -33,7 +33,7 @@ async function main() {
   const logger = new AuditLogger(repoFullPath);
 
   console.log("\n" + "=".repeat(60));
-  console.log(`🛡️  RepoShield Unified Sentinel Audit: ${owner}/${repo}`);
+  console.log(`🛡️  Kanteishi Audit: ${owner}/${repo}`);
   console.log(`🚀 Mode: ${isResume ? "RESUME" : "FRESH"} | Limit: ${limit}`);
   console.log("=".repeat(60) + "\n");
 
@@ -488,7 +488,7 @@ async function main() {
     // ═══════════════════════════════════════════════════════════════════════════
     process.stdout.write("\n\n");
     console.log("┌" + "─".repeat(88) + "┐");
-    console.log(`│ ${"REPO SHIELD UNIFIED SCAN SUMMARY".padEnd(86)} │`);
+    console.log(`│ ${"KANTEISHI SCAN SUMMARY".padEnd(86)} │`);
     console.log("├──────────┬─────────────────────────────────┬──────────┬───────────────────┤");
     console.log(`│ ${"PR #".padEnd(8)} │ ${"Redundancy Category".padEnd(31)} │ ${"Matches".padEnd(8)} │ ${"Status".padEnd(17)} │`);
     console.log("├──────────┼─────────────────────────────────┼──────────┼───────────────────┤");
